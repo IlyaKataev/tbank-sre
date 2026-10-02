@@ -3,10 +3,12 @@ package db
 import (
 	"context"
 	"fmt"
+	"time"
 
 	pgxdecimal "github.com/jackc/pgx-shopspring-decimal"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rs/zerolog/log"
 )
 
 func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
@@ -26,8 +28,25 @@ func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	}
 
 	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
 		return nil, fmt.Errorf("ping db: %w", err)
 	}
 
 	return pool, nil
+}
+
+// ClosePool keeps process shutdown bounded even if a handler leaked a connection.
+func ClosePool(pool *pgxpool.Pool, timeout time.Duration) {
+	closed := make(chan struct{})
+	go func() {
+		pool.Close()
+		close(closed)
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-closed:
+	case <-timer.C:
+		log.Error().Msg("database pool shutdown timed out")
+	}
 }

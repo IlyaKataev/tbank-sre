@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffdd2d">
+  <title>Маркет — каталог товаров</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23ffdd2d'/%3E%3Cpath d='M17 17h30v10H37v24H27V27H17z' fill='%23232323'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <svg class="svg-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
+    <symbol id="icon-box" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Zm-9 5v9l9 5 9-5V8M12 13v9M7.5 5.5l9 5"/></symbol>
+    <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></symbol>
+    <symbol id="icon-edit" viewBox="0 0 24 24"><path d="m15 5 4 4M4 20l5-1L21 7a2.8 2.8 0 0 0-4-4L5 15l-1 5Z"/></symbol>
+    <symbol id="icon-archive" viewBox="0 0 24 24"><path d="M4 8h16v13H4zM3 3h18v5H3zM9 12h6"/></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M5.6 7A7 7 0 0 1 18 6l2 6M4 12l2 6a7 7 0 0 0 12.4-1"/></symbol>
+    <symbol id="icon-logout" viewBox="0 0 24 24"><path d="M10 4H4v16h6m4-12 4 4-4 4m-5-4h12"/></symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+  </defs></svg>
+
+  <section id="auth-screen" class="auth-layout">
+    <div class="auth-story">
+      <a class="brand" href="/" aria-label="Маркет, главная"><span class="brand-mark">т</span><span>маркет<span class="brand-dot">.</span></span></a>
+      <div class="story-copy"><span class="eyebrow">ПРОСТРАНСТВО ДЛЯ ВАШИХ ТОВАРОВ</span><h1>Хорошим вещам<br>нужна своя<br><span>витрина.</span></h1><p>Соберите каталог, управляйте ассортиментом<br class="desktop-break"> и держите всё важное под рукой.</p></div>
+      <div class="story-art" aria-hidden="true"><div class="art-label">СОЗДАВАЙТЕ. ОБНОВЛЯЙТЕ. РАСТИТЕ.</div><div class="art-box art-box-back"><svg><use href="#icon-box"/></svg></div><div class="art-box art-box-front"><svg><use href="#icon-box"/></svg></div><span class="art-star">✳</span><div class="art-tag"><span class="status-dot"></span> Всё на своих местах</div></div>
+      <span class="story-footer">Т-Банк · SRE Marketplace</span>
+    </div>
+    <div class="auth-side"><div class="auth-card">
+      <span class="eyebrow">ВАШ ЛИЧНЫЙ КАБИНЕТ</span><h2 id="auth-title">С возвращением</h2><p id="auth-description" class="muted">Войдите, чтобы открыть каталог товаров.</p>
+      <div class="auth-tabs" role="group" aria-label="Вход или регистрация"><button type="button" id="login-tab" class="selected" aria-pressed="true">Войти</button><button type="button" id="register-tab" aria-pressed="false">Создать аккаунт</button></div>
+      <form id="auth-form">
+        <label for="auth-email">Электронная почта</label><input id="auth-email" name="email" type="email" autocomplete="email" placeholder="you@example.ru" required maxlength="254">
+        <label for="auth-password">Пароль</label><input id="auth-password" name="password" type="password" autocomplete="current-password" placeholder="Введите пароль" required maxlength="72">
+        <div id="role-field" hidden><label for="auth-role">Как вы будете пользоваться Маркетом?</label><select id="auth-role" name="role"><option value="SELLER">Продавец — управлять товарами</option><option value="USER">Покупатель — смотреть каталог</option></select><p class="field-hint">Роль выбирается при регистрации.</p></div>
+        <p id="auth-error" class="form-error" role="alert" hidden></p>
+        <button id="auth-submit" type="submit" class="button button-primary full-width"><span>Войти в Маркет</span><svg class="icon"><use href="#icon-arrow"/></svg></button>
+      </form>
+      <p class="auth-note">Ваш ассортимент. Ваш порядок.</p>
+    </div></div>
+  </section>
+
+  <div id="app-screen" class="app-layout" hidden>
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="Маркет, главная"><span class="brand-mark">т</span><span>маркет<span class="brand-dot">.</span></span></a>
+      <div class="workspace-label"><span class="workspace-dot"></span> Рабочее пространство</div>
+      <nav class="sidebar-nav" aria-label="Каталог"><span class="nav-heading">МАГАЗИН</span><button type="button" id="catalog-nav" class="nav-item current"><svg class="icon"><use href="#icon-box"/></svg><span>Товары</span><span id="nav-total" class="nav-count">—</span></button><button type="button" id="archive-nav" class="nav-item"><svg class="icon"><use href="#icon-archive"/></svg><span>Архив</span></button></nav>
+      <div class="sidebar-bottom"><div class="sidebar-tip"><span class="tip-symbol">✳</span><strong>Меньше рутины.<br>Больше порядка.</strong><p>Все товары — в одном месте.</p></div><div class="account"><span class="avatar" id="account-avatar">М</span><div class="account-info"><strong id="account-name">Мой аккаунт</strong><span id="account-role">Продавец</span></div><button type="button" id="logout" class="icon-button" aria-label="Выйти из аккаунта" title="Выйти"><svg class="icon"><use href="#icon-logout"/></svg></button></div><span class="sidebar-footnote">Т-Банк · SRE Marketplace</span></div>
+    </aside>
+    <main class="main-content">
+      <header class="topbar"><div class="breadcrumb">Магазин <span>/</span> <strong>Каталог товаров</strong></div><span class="topbar-label">Всё под контролем</span></header>
+      <div class="page-content">
+        <div class="page-heading"><div><span class="eyebrow">ВАШ АССОРТИМЕНТ</span><h1>Товары<span class="heading-dot">.</span></h1><p id="catalog-description" class="muted">Управляйте каталогом и находите место для нового.</p></div><button type="button" id="create-product" class="button button-primary"><svg class="icon"><use href="#icon-plus"/></svg>Добавить товар</button></div>
+        <div class="stats" aria-label="Сводка каталога"><div class="stat-card"><div><span>Всего товаров</span><strong id="stat-total">—</strong></div><span class="stat-icon neutral"><svg class="icon"><use href="#icon-box"/></svg></span></div><div class="stat-card"><div><span>В продаже</span><strong id="stat-active">—</strong></div><span class="stat-icon green"><svg class="icon"><use href="#icon-check"/></svg></span></div><div class="stat-card"><div><span>В архиве</span><strong id="stat-archived">—</strong></div><span class="stat-icon sand"><svg class="icon"><use href="#icon-archive"/></svg></span></div></div>
+        <section class="catalog-panel" aria-labelledby="catalog-heading">
+          <div class="panel-heading"><h2 id="catalog-heading">Каталог</h2><span id="result-count" class="count-pill">—</span><button id="reload" type="button" class="icon-button reload" aria-label="Обновить каталог" title="Обновить"><svg class="icon"><use href="#icon-refresh"/></svg></button></div>
+          <form id="filter-form" class="filters"><div class="filter-field"><label for="status-filter">Статус</label><select id="status-filter"><option value="">Все статусы</option value="ACTIVE">В продаже</option><option value="INACTIVE">Скрыт</option><option value="ARCHIVED">В архиве</option></select></div><div class="filter-field category-filter"><label for="category-filter">Категория</label><input id="category-filter" placeholder="Название категории" maxlength="100" list="category-options" autocomplete="off"><datalist id="category-options"></datalist></div><button type="submit" class="button button-secondary">Применить</button><button id="reset-filters" type="button" class="text-button" hidden>Сбросить</button></form>
+          <p id="catalog-error" class="form-error catalog-error" role="alert" hidden></p>
+          <div id="products-region" aria-live="polite" aria-busy="false"></div>
+          <div class="pagination"><span id="page-range">Нет товаров</span><div class="page-controls"><label for="page-size" class="sr-only">Товаров на странице</label><select id="page-size" aria-label="Товаров на странице"><option value="10">По 10</option><option value="20">По 20</option><option value="50">По 50</option></select><button id="previous-page" type="button" class="page-button" aria-label="Предыдущая страница">←</button><span id="page-number">1 / 1</span><button id="next-page" type="button" class="page-button" aria-label="Следующая страница">→</button></div></div>
+        </section>
+        <p class="catalog-footnote" id="ownership-note">Редактировать и архивировать можно свои товары. Каталог виден всем участникам.</p>
+      </div>
+    </main>
+  </div>
+
+  <dialog id="product-dialog" class="modal" aria-labelledby="product-dialog-title"><div class="modal-header"><div><span class="eyebrow">КАТАЛОГ ТОВАРОВ</span><h2 id="product-dialog-title">Новый товар</h2></div><button type="button" class="icon-button close-dialog" aria-label="Закрыть"><svg class="icon"><use href="#icon-close"/></svg></button></div><form id="product-form"><fieldset id="product-fields"><label for="product-name">Название</label><input id="product-name" name="name" placeholder="Например, настольная лампа" required maxlength="255"><label for="product-category">Категория</label><input id="product-category" name="category" placeholder="Например, Для дома" required maxlength="100" list="category-options"><div class="form-grid"><div><label for="product-price">Цена, ₽</label><input id="product-price" name="price" type="number" min="0.01" max="9999999999.99" step="0.01" required placeholder="0,00" inputmode="decimal"></div><div><label for="product-stock">Остаток, шт.</label><input id="product-stock" name="stock" type="number" min="0" max="2147483647" step="1" required placeholder="0" inputmode="numeric"></div></div><label for="product-description">Описание <span class="optional">необязательно</span></label><textarea id="product-description" name="description" rows="3" maxlength="4000" placeholder="Расскажите о товаре"></textarea><div id="product-status-field" hidden><label for="product-status">Статус</label><select id="product-status" name="status"><option value="ACTIVE">В продаже</option><option value="INACTIVE">Скрыт</option><option value="ARCHIVED">В архиве</option></select></div></fieldset><p id="product-form-error" class="form-error" role="alert" hidden></p><div class="modal-footer"><button type="button" class="button button-secondary close-dialog" id="product-cancel">Отмена</button><button id="product-save" type="submit" class="button button-primary">Добавить товар</button><button id="product-edit" type="button" class="button button-primary" hidden>Редактировать</button></div></form></dialog>
+  <dialog id="archive-dialog" class="modal small-modal" aria-labelledby="archive-title"><div class="modal-header"><span class="stat-icon sand"><svg class="icon"><use href="#icon-archive"/></svg></span><button type="button" class="icon-button close-dialog" aria-label="Закрыть"><svg class="icon"><use href="#icon-close"/></svg></button></div><h2 id="archive-title">Перенести товар в архив?</h2><p class="muted">«<span id="archive-product-name"></span>» больше не будет в продаже. Его можно вернуть через редактирование.</p><p id="archive-error" class="form-error" role="alert" hidden></p><div class="modal-footer"><button type="button" class="button button-secondary close-dialog">Оставить</button><button id="confirm-archive" type="button" class="button button-dark">В архив</button></div></dialog>
+  <div id="toast" class="toast" role="status" hidden><svg class="icon"><use href="#icon-check"/></svg><span></span></div>
+  <noscript><p class="noscript">Для работы с каталогом включите JavaScript в браузере.</p></noscript>
+</body>
+</html>

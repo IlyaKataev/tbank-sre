@@ -1,16 +1,12 @@
 package middleware
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"io"
 	"net/http"
-	"strings"
 	"time"
 
+	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -37,24 +33,23 @@ func Logger(next http.Handler) http.Handler {
 
 		w.Header().Set("X-Request-Id", requestID)
 
-		var bodyStr string
-		if isMutating(r.Method) && r.Body != nil && r.ContentLength > 0 {
-			bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, 64*1024))
-			r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-			bodyStr = maskSensitive(bodyBytes)
-		}
-
 		lc := &requestLogCtx{}
 		r = r.WithContext(context.WithValue(r.Context(), ctxLogCtx, lc))
 
-		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		rw := chimw.NewWrapResponseWriter(w, r.ProtoMajor)
 		next.ServeHTTP(rw, r)
+		status := rw.Status()
+		if status == 0 {
+			status = http.StatusOK
+		}
 
+		// Only operational metadata: never read the body or record credentials,
+		// headers or the query string. Logging must not change the request stream.
 		evt := log.Info().
 			Str("request_id", requestID).
 			Str("method", r.Method).
 			Str("endpoint", r.URL.Path).
-			Int("status_code", rw.statusCode).
+			Int("status_code", status).
 			Int64("duration_ms", time.Since(start).Milliseconds()).
 			Str("timestamp", start.UTC().Format(time.RFC3339))
 
@@ -64,39 +59,6 @@ func Logger(next http.Handler) http.Handler {
 			evt = evt.Str("user_id", "")
 		}
 
-		if bodyStr != "" {
-			evt = evt.RawJSON("request_body", json.RawMessage(bodyStr))
-		}
-
 		evt.Msg("request")
-		_ = zerolog.GlobalLevel()
 	})
-}
-
-func isMutating(method string) bool {
-	return method == http.MethodPost || method == http.MethodPut || method == http.MethodDelete
-}
-
-func maskSensitive(body []byte) string {
-	var m map[string]any
-	if err := json.Unmarshal(body, &m); err != nil {
-		return string(body)
-	}
-	for k := range m {
-		if strings.Contains(strings.ToLower(k), "password") || strings.Contains(strings.ToLower(k), "token") {
-			m[k] = "***"
-		}
-	}
-	b, _ := json.Marshal(m)
-	return string(b)
-}
-
-type responseWriter struct {
-	http.ResponseWriter
-	statusCode int
-}
-
-func (rw *responseWriter) WriteHeader(code int) {
-	rw.statusCode = code
-	rw.ResponseWriter.WriteHeader(code)
 }

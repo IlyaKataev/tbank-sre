@@ -43,7 +43,7 @@ type OrderWithItems struct {
 }
 
 func (s *OrderService) Create(ctx context.Context, in CreateOrderInput) (OrderWithItems, error) {
-	if err := s.checkRateLimit(ctx, in.UserID, "CREATE_ORDER"); err != nil {
+	if err := s.checkRateLimit(ctx, s.q, in.UserID, "CREATE_ORDER"); err != nil {
 		return OrderWithItems{}, err
 	}
 
@@ -206,7 +206,16 @@ type UpdateOrderInput struct {
 }
 
 func (s *OrderService) Update(ctx context.Context, in UpdateOrderInput) (OrderWithItems, error) {
-	order, err := s.q.GetOrderByID(ctx, in.OrderID)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return OrderWithItems{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	qtx := s.q.WithTx(tx)
+
+	// Serialize changes to an order before checking its state or touching stock.
+	// Cancel uses the same lock order: order first, then its inventory rows.
+	order, err := qtx.GetOrderByIDForUpdate(ctx, in.OrderID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return OrderWithItems{}, apierr.New(apierr.ErrOrderNotFound, "Заказ не найден")
@@ -221,17 +230,9 @@ func (s *OrderService) Update(ctx context.Context, in UpdateOrderInput) (OrderWi
 		return OrderWithItems{}, apierr.New(apierr.ErrInvalidStateTransition, "Обновление разрешено только в статусе CREATED")
 	}
 
-	if err := s.checkRateLimit(ctx, in.CallerID, "UPDATE_ORDER"); err != nil {
+	if err := s.checkRateLimit(ctx, qtx, in.CallerID, "UPDATE_ORDER"); err != nil {
 		return OrderWithItems{}, err
 	}
-
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return OrderWithItems{}, fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	qtx := s.q.WithTx(tx)
 
 	oldItems, err := qtx.GetOrderItems(ctx, in.OrderID)
 	if err != nil {
@@ -354,7 +355,15 @@ func (s *OrderService) Update(ctx context.Context, in UpdateOrderInput) (OrderWi
 }
 
 func (s *OrderService) Cancel(ctx context.Context, id uuid.UUID, callerID uuid.UUID, callerRole string) (OrderWithItems, error) {
-	order, err := s.q.GetOrderByID(ctx, id)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return OrderWithItems{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	qtx := s.q.WithTx(tx)
+
+	// Read the current state while holding the lock until stock and status commit.
+	order, err := qtx.GetOrderByIDForUpdate(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return OrderWithItems{}, apierr.New(apierr.ErrOrderNotFound, "Заказ не найден")
@@ -369,14 +378,6 @@ func (s *OrderService) Cancel(ctx context.Context, id uuid.UUID, callerID uuid.U
 	if order.Status != "CREATED" && order.Status != "PAYMENT_PENDING" {
 		return OrderWithItems{}, apierr.New(apierr.ErrInvalidStateTransition, "Отмена заказа невозможна в текущем состоянии")
 	}
-
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return OrderWithItems{}, fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	qtx := s.q.WithTx(tx)
 
 	items, err := qtx.GetOrderItems(ctx, id)
 	if err != nil {
@@ -411,8 +412,8 @@ func (s *OrderService) Cancel(ctx context.Context, id uuid.UUID, callerID uuid.U
 }
 
 // checkRateLimit returns ORDER_LIMIT_EXCEEDED if the user performed the operation recently.
-func (s *OrderService) checkRateLimit(ctx context.Context, userID uuid.UUID, opType string) error {
-	op, err := s.q.GetLastUserOperation(ctx, sqlcdb.GetLastUserOperationParams{
+func (s *OrderService) checkRateLimit(ctx context.Context, q *sqlcdb.Queries, userID uuid.UUID, opType string) error {
+	op, err := q.GetLastUserOperation(ctx, sqlcdb.GetLastUserOperationParams{
 		UserID:        userID,
 		OperationType: opType,
 	})

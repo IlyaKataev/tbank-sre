@@ -1,46 +1,64 @@
+name: tbank-sre
+
+x-app-environment: &app-environment
+  DB_DSN: postgres://marketplace:${POSTGRES_PASSWORD:?Run make env first}@db:5432/marketplace?sslmode=disable
+  JWT_SECRET: ${JWT_SECRET:?Run make env first}
+  JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-15m}
+  JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-168h}
+  ORDER_RATE_LIMIT_MINUTES: ${ORDER_RATE_LIMIT_MINUTES:-1}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  HTTP_PORT: "8080"
+  DB_CONNECT_TIMEOUT: 10s
+  SHUTDOWN_TIMEOUT: 10s
+  READY_TIMEOUT: 2s
+
 services:
   db:
-    image: postgres:18-alpine
+    image: postgres:18.3-alpine3.23
     restart: unless-stopped
     environment:
       POSTGRES_DB: marketplace
       POSTGRES_USER: marketplace
-      POSTGRES_PASSWORD: marketplace
-    ports:
-      - "5432:5432"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run make env first}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U marketplace -d marketplace"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      interval: 2s
+      timeout: 3s
+      retries: 20
 
-  app:
-    build: .
-    restart: unless-stopped
+  migrate:
+    image: ${APP_IMAGE:-tbank-sre:local}
+    command: ["/app/migrate", "up"]
+    environment: *app-environment
     depends_on:
       db:
         condition: service_healthy
-    ports:
-      - "8080:8080"
-    environment:
-      DB_DSN: postgres://marketplace:marketplace@db:5432/marketplace?sslmode=disable
-      JWT_SECRET: super-secret-key-change-in-production
-      JWT_ACCESS_TTL: 15m
-      JWT_REFRESH_TTL: 168h
-      ORDER_RATE_LIMIT_MINUTES: 1
-      HTTP_PORT: 8080
-      LOG_LEVEL: debug
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
-  swagger:
-    image: swaggerapi/swagger-ui
+  app:
+    image: ${APP_IMAGE:-tbank-sre:local}
+    restart: unless-stopped
+    environment: *app-environment
     ports:
-      - "8081:8080"
-    environment:
-      SWAGGER_JSON: /openapi.yaml
-    volumes:
-      - ./api/openapi.yaml:/openapi.yaml:ro
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    stop_grace_period: 15s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
 volumes:
   pgdata:

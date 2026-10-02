@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -22,12 +24,13 @@ import (
 )
 
 var testSrv *httptest.Server
+var testPool *pgxpool.Pool
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
 
 	pgCtr, err := tcpostgres.Run(ctx,
-		"postgres:18-alpine",
+		"postgres:18.3-alpine3.23",
 		tcpostgres.WithDatabase("marketplace"),
 		tcpostgres.WithUsername("marketplace"),
 		tcpostgres.WithPassword("marketplace"),
@@ -56,6 +59,7 @@ func TestMain(m *testing.M) {
 		_ = pgCtr.Terminate(ctx)
 		os.Exit(1)
 	}
+	testPool = pool
 
 	if err := app.RunMigrations(pool); err != nil {
 		fmt.Fprintf(os.Stderr, "run migrations: %v\n", err)
@@ -175,6 +179,59 @@ func TestAuth_NoToken_Returns401(t *testing.T) {
 	var body map[string]any
 	decodeJSON(t, resp, &body)
 	assert.Equal(t, "TOKEN_INVALID", body["error_code"])
+}
+
+func TestAuth_InvalidRegistration(t *testing.T) {
+	tests := []struct {
+		name     string
+		email    string
+		password string
+		role     string
+	}{
+		{"invalid email", "not-an-email", "password123", "USER"},
+		{"short password", "short-password@example.com", "short", "USER"},
+		{"unknown role", "unknown-role@example.com", "password123", "ROOT"},
+		{"admin role", "public-admin@example.com", "password123", "ADMIN"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := do(t, http.MethodPost, "/auth/register",
+				map[string]string{"email": tt.email, "password": tt.password, "role": tt.role}, "")
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			var body map[string]any
+			decodeJSON(t, resp, &body)
+			assert.Equal(t, "VALIDATION_ERROR", body["error_code"])
+		})
+	}
+}
+
+func TestHealth_PublicProbes(t *testing.T) {
+	for _, path := range []string{"/healthz", "/readyz"} {
+		t.Run(path, func(t *testing.T) {
+			resp := do(t, http.MethodGet, path, nil, "")
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+			resp.Body.Close()
+		})
+	}
+}
+
+func TestHealth_DatabaseUnavailable(t *testing.T) {
+	// Closing an independent pool simulates loss of DB access without interrupting
+	// other tests or requiring permission to stop the database container.
+	pool, err := pgxpool.New(context.Background(), testPool.Config().ConnString())
+	require.NoError(t, err)
+	pool.Close()
+	srv := httptest.NewServer(app.NewRouter(pool, app.Config{}))
+	defer srv.Close()
+	for _, tt := range []struct {
+		path   string
+		status int
+	}{{"/healthz", http.StatusOK}, {"/readyz", http.StatusServiceUnavailable}} {
+		resp, err := srv.Client().Get(srv.URL + tt.path)
+		require.NoError(t, err)
+		assert.Equal(t, tt.status, resp.StatusCode, tt.path)
+		resp.Body.Close()
+	}
 }
 
 type productResp struct {
@@ -467,6 +524,76 @@ func TestOrder_CannotCancelTwice(t *testing.T) {
 	assert.Equal(t, "INVALID_STATE_TRANSITION", body["error_code"])
 }
 
+func TestOrders_ConcurrentCancelRestoresStockOnce(t *testing.T) {
+	seller := register(t, "seller-concurrent-cancel@example.com", "password123", "SELLER")
+	buyer := register(t, "buyer-concurrent-cancel@example.com", "password123", "USER")
+	productID := createProduct(t, seller.AccessToken, 25, 10)
+	resp := do(t, http.MethodPost, "/orders", map[string]any{
+		"items": []map[string]any{{"product_id": productID, "quantity": 2}},
+	}, buyer.AccessToken)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var order orderResp
+	decodeJSON(t, resp, &order)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	lock, err := testPool.Begin(ctx)
+	require.NoError(t, err)
+	defer lock.Rollback(context.Background())
+	_, err = lock.Exec(ctx, "SELECT id FROM products WHERE id = $1 FOR UPDATE", productID)
+	require.NoError(t, err)
+
+	type result struct {
+		status int
+		body   []byte
+		err    error
+	}
+	results := make(chan result, 2)
+	for range 2 {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, testSrv.URL+"/orders/"+order.ID+"/cancel", nil)
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer "+buyer.AccessToken)
+		go func() {
+			resp, err := testSrv.Client().Do(req)
+			if err != nil {
+				results <- result{err: err}
+				return
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			results <- result{status: resp.StatusCode, body: body, err: err}
+		}()
+	}
+
+	// Hold inventory until both requests are in their DB transactions. Without
+	// an order row lock, both observe CREATED and restore the reserved stock.
+	require.Eventually(t, func() bool {
+		var waiting int
+		err := testPool.QueryRow(ctx, `SELECT COUNT(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&waiting)
+		return err == nil && waiting >= 2
+	}, 5*time.Second, 25*time.Millisecond, "both cancellation requests must overlap")
+	require.NoError(t, lock.Commit(ctx))
+
+	var statuses []int
+	for range 2 {
+		result := <-results
+		require.NoError(t, result.err)
+		statuses = append(statuses, result.status)
+		if result.status == http.StatusConflict {
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(result.body, &body))
+			assert.Equal(t, "INVALID_STATE_TRANSITION", body["error_code"])
+		}
+	}
+	assert.ElementsMatch(t, []int{http.StatusOK, http.StatusConflict}, statuses)
+	resp = do(t, http.MethodGet, "/products/"+productID, nil, buyer.AccessToken)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var product productResp
+	decodeJSON(t, resp, &product)
+	assert.Equal(t, 10, product.Stock, "reserved stock must be returned exactly once")
+}
+
 func TestRBAC_UserCannotCreatePromoCode(t *testing.T) {
 	userTokens := register(t, "user-rbac1@example.com", "password123", "USER")
 	resp := do(t, http.MethodPost, "/promo-codes",
@@ -497,7 +624,15 @@ func TestRBAC_SellerCannotModifyOtherSellerProduct(t *testing.T) {
 
 func TestRBAC_AdminCanModifyAnyProduct(t *testing.T) {
 	sellerTokens := register(t, "seller-rbac3@example.com", "password123", "SELLER")
-	adminTokens := register(t, "admin-rbac@example.com", "password123", "ADMIN")
+	// Admins are provisioned out of band; public registration cannot grant the role.
+	register(t, "admin-rbac@example.com", "password123", "USER")
+	_, err := testPool.Exec(context.Background(), "UPDATE users SET role = 'ADMIN' WHERE email = $1", "admin-rbac@example.com")
+	require.NoError(t, err)
+	login := do(t, http.MethodPost, "/auth/login",
+		map[string]string{"email": "admin-rbac@example.com", "password": "password123"}, "")
+	require.Equal(t, http.StatusOK, login.StatusCode)
+	var adminTokens authResp
+	decodeJSON(t, login, &adminTokens)
 	productID := createProduct(t, sellerTokens.AccessToken, 50.0, 10)
 
 	resp := do(t, http.MethodPut, "/products/"+productID,

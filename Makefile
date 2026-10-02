@@ -1,51 +1,62 @@
-.PHONY: generate build run test test-e2e migrate lint fmt
+COMPOSE ?= docker compose
+DOCKER_BUILD_FLAGS ?=
+IMAGE ?= tbank-sre
+VERSION ?= local
+REVISION := $(shell git rev-parse HEAD 2>/dev/null || echo archive)
+APP_IMAGE := $(IMAGE):$(VERSION)
+OAPI_CODEGEN_VERSION := v2.8.0
+SQLC_VERSION := v1.31.1
+GOBIN := $(CURDIR)/bin/tools
 
-OAPI_CODEGEN := $(shell go env GOPATH)/bin/oapi-codegen
-SQLC         := $(shell go env GOPATH)/bin/sqlc
+.PHONY: env build up down logs migrate scale smoke test test-e2e tools generate local-build archive
 
-# Install codegen tools locally
-tools:
-	go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
-	go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
+env:
+	python3 scripts/init-env.py
 
-# Generate all code from specs
-generate:
-	mkdir -p internal/api internal/db/sqlc
-	$(OAPI_CODEGEN) -generate "chi-server,types,strict-server,spec" -package api -o internal/api/api.gen.go api/openapi.yaml
-	$(SQLC) generate
+# Build once; up and migrate only run the resulting image.
+build:
+	docker build $(DOCKER_BUILD_FLAGS) --build-arg VERSION=$(VERSION) --build-arg REVISION=$(REVISION) -t $(APP_IMAGE) .
 
-# Build the binary
-build: generate
-	go build -o bin/server ./cmd/server
+up:
+	APP_IMAGE=$(APP_IMAGE) $(COMPOSE) up -d --wait --wait-timeout 90
 
-# Run via docker compose
-run:
-	docker compose up --build -d
+down:
+	APP_IMAGE=$(APP_IMAGE) $(COMPOSE) down
 
-# Run unit tests (exclude e2e)
-test:
-	go test $$(go list ./... | grep -v /e2e) -v -count=1
+logs:
+	APP_IMAGE=$(APP_IMAGE) $(COMPOSE) logs -f app
 
-# Run end-to-end tests (requires Docker)
-test-e2e:
-	go test ./internal/e2e/... -v -count=1 -timeout 30s
-
-# Apply migrations (requires running DB)
 migrate:
-	go run ./cmd/migrate/main.go
+	APP_IMAGE=$(APP_IMAGE) $(COMPOSE) run --rm migrate
 
-# Tidy dependencies
-tidy:
-	go mod tidy
+scale:
+	APP_IMAGE=$(APP_IMAGE) $(COMPOSE) -f docker-compose.yml -f docker-compose.scale.yml up -d --wait --scale app=2
 
-# Format code using golangci-lint formatter (goimports)
-fmt:
-	golangci-lint fmt ./...
+smoke:
+	python3 scripts/smoke.py --base-url http://127.0.0.1:8080
 
-# Lint code
-lint:
-	golangci-lint run ./...
+test:
+	docker build $(DOCKER_BUILD_FLAGS) --target test -t $(IMAGE):test .
+	docker run --rm $(IMAGE):test sh -c 'go test $$(go list ./... | sed "\\|/internal/e2e$$|d")'
 
-# Remove generated files
-clean:
-	rm -rf internal/api/ internal/db/sqlc/ bin/
+# Docker socket lets Testcontainers create a temporary PostgreSQL.
+test-e2e:
+	docker build $(DOCKER_BUILD_FLAGS) --target test -t $(IMAGE):test .
+	docker run --rm --network host -v /var/run/docker.sock:/var/run/docker.sock -e TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 $(IMAGE):test go test ./internal/e2e/... -v -count=1 -timeout 3m
+
+tools:
+	GOBIN=$(GOBIN) go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@$(OAPI_CODEGEN_VERSION)
+	GOBIN=$(GOBIN) go install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
+
+generate: tools
+	mkdir -p internal/api internal/db/sqlc
+	$(GOBIN)/oapi-codegen -generate chi-server,types,strict-server,spec -package api -o internal/api/api.gen.go api/openapi.yaml
+	$(GOBIN)/sqlc generate
+
+local-build: generate
+	CGO_ENABLED=0 go build -trimpath -o bin/server ./cmd/server
+	CGO_ENABLED=0 go build -trimpath -o bin/migrate ./cmd/migrate
+
+archive:
+	mkdir -p dist
+	git archive --format=zip --prefix=tbank-sre/ -o dist/tbank-sre.zip HEAD

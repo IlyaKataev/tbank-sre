@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	mw "marketplace/internal/middleware"
 	"marketplace/internal/migrations"
 	"marketplace/internal/service"
+	"marketplace/web"
 )
 
 type Config struct {
@@ -25,6 +27,8 @@ type Config struct {
 	JWTAccessTTL          time.Duration
 	JWTRefreshTTL         time.Duration
 	OrderRateLimitMinutes int
+	ReadyTimeout          time.Duration
+	IsShuttingDown        func() bool
 }
 
 func NewRouter(pool *pgxpool.Pool, cfg Config) http.Handler {
@@ -66,6 +70,11 @@ func NewRouter(pool *pgxpool.Pool, cfg Config) http.Handler {
 		})
 	})
 	r.Use(mw.Logger)
+	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("{\"status\":\"ok\"}\n"))
+	})
+	r.Get("/readyz", readyHandler(pool.Ping, cfg.ReadyTimeout, cfg.IsShuttingDown))
 
 	// Public auth routes, no JWT required
 	r.Post("/auth/register", wrapper.RegisterUser)
@@ -86,20 +95,62 @@ func NewRouter(pool *pgxpool.Pool, cfg Config) http.Handler {
 		r.Post("/orders/{id}/cancel", wrapper.CancelOrder)
 		r.Post("/promo-codes", wrapper.CreatePromoCode)
 	})
+	r.Handle("/*", web.Handler())
 
 	return r
 }
 
+func readyHandler(ping func(context.Context) error, timeout time.Duration, shuttingDown func() bool) http.HandlerFunc {
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		if shuttingDown != nil && shuttingDown() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("{\"status\":\"draining\"}\n"))
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+		if err := ping(ctx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("{\"status\":\"unavailable\"}\n"))
+			return
+		}
+		_, _ = w.Write([]byte("{\"status\":\"ready\"}\n"))
+	}
+}
+
 func RunMigrations(pool *pgxpool.Pool) error {
-	db := stdlib.OpenDBFromPool(pool)
+	// Migration metadata and advisory locks also use background contexts inside
+	// the driver. Server-side timeouts bound those operations, including driver
+	// initialization before migrate.LockTimeout is available. A dedicated
+	// connection keeps these session settings out of the application's pool.
+	migrationConfig := pool.Config().ConnConfig.Copy()
+	if migrationConfig.RuntimeParams == nil {
+		migrationConfig.RuntimeParams = make(map[string]string)
+	}
+	migrationConfig.RuntimeParams["lock_timeout"] = "30s"
+	migrationConfig.RuntimeParams["statement_timeout"] = "60s"
+	db := stdlib.OpenDB(*migrationConfig)
+	db.SetMaxOpenConns(1)
 	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
 
 	sourceDriver, err := iofs.New(migrations.FS, ".")
 	if err != nil {
 		return err
 	}
 
-	dbDriver, err := pgmigrate.WithInstance(db, &pgmigrate.Config{})
+	dbDriver, err := pgmigrate.WithConnection(ctx, conn, &pgmigrate.Config{StatementTimeout: 60 * time.Second})
 	if err != nil {
 		return err
 	}
@@ -108,6 +159,8 @@ func RunMigrations(pool *pgxpool.Pool) error {
 	if err != nil {
 		return err
 	}
+	defer m.Close()
+	m.LockTimeout = 35 * time.Second
 
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
 		return err

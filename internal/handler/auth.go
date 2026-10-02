@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"net/mail"
 
 	"marketplace/internal/api"
 )
@@ -10,6 +11,21 @@ func (h *Handler) RegisterUser(ctx context.Context, req api.RegisterUserRequestO
 	role := "USER"
 	if req.Body.Role != nil {
 		role = string(*req.Body.Role)
+	}
+	v := &validator{}
+	v.pattern("email", string(req.Body.Email), "must be a valid email address", func(value string) bool {
+		address, err := mail.ParseAddress(value)
+		return err == nil && address.Address == value
+	})
+	v.minLen("password", req.Body.Password, 8)
+	v.pattern("password", req.Body.Password, "must not exceed 72 bytes", func(value string) bool {
+		return len(value) <= 72
+	})
+	v.pattern("role", role, "public registration allows USER or SELLER", func(value string) bool {
+		return value == "USER" || value == "SELLER"
+	})
+	if err := v.err(); err != nil {
+		return api.RegisterUser400JSONResponse{ValidationErrorJSONResponse: api.ValidationErrorJSONResponse(errJSON(err))}, nil
 	}
 
 	pair, err := h.auth.Register(ctx, string(req.Body.Email), req.Body.Password, role)

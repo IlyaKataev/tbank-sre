@@ -2,6 +2,8 @@
 *.test
 *.out
 .env
+.env.*
+!.env.example
 
 # Generated code — regenerate with `make generate`
 internal/api/
@@ -10,3 +12,8 @@ internal/db/sqlc/
 # Binaries
 bin/
 dist/
+
+artifacts/
+__pycache__/
+.agents/
+.codex/

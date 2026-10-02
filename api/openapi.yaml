@@ -564,8 +564,9 @@ components:
           maxLength: 72
           description: Пароль (минимум 8 символов)
         role:
-          $ref: '#/components/schemas/UserRole'
-          description: Роль (по умолчанию USER)
+          type: string
+          enum: [USER, SELLER]
+          description: Роль при регистрации (по умолчанию USER). ADMIN назначается отдельно.
 
     LoginRequest:
       type: object
