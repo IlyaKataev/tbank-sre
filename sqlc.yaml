@@ -1,0 +1,32 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    queries: "internal/db/queries"
+    schema: "internal/migrations/000001_init.up.sql"
+    gen:
+      go:
+        package: "sqlcdb"
+        out: "internal/db/sqlc"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_interface: true
+        emit_empty_slices: true
+        overrides:
+          - db_type: "uuid"
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+          - db_type: "pg_catalog.numeric"
+            go_type:
+              import: "github.com/shopspring/decimal"
+              type: "Decimal"
+          - db_type: "product_status"
+            go_type: "string"
+          - db_type: "order_status"
+            go_type: "string"
+          - db_type: "user_role"
+            go_type: "string"
+          - db_type: "discount_type"
+            go_type: "string"
+          - db_type: "operation_type"
+            go_type: "string"

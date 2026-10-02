@@ -1,0 +1,12 @@
+# Go
+*.test
+*.out
+.env
+
+# Generated code — regenerate with `make generate`
+internal/api/
+internal/db/sqlc/
+
+# Binaries
+bin/
+dist/
